@@ -10,7 +10,7 @@ function json(body, env, status = 200) {
   return new Response(JSON.stringify(body), { status, headers: baseHeaders(env) });
 }
 
-const PLAN_SYSTEM_PROMPT = `Sos Cerca, una asesora de compras de ropa en Uruguay. Respondés siempre en español de Río de la Plata.
+const PLAN_SYSTEM_PROMPT = `Sos Cerca, una asesora de compras de ropa en Uruguay. Respondés siempre en español neutro, claro y profesional.
 Tenés UNASOLA herramienta disponible: search_products. Busca en el catálogo real y devuelve prendas con nombre, precio, tienda, shopping, categoría, stock, talles, color y género.
 No tenés acceso directo al catálogo: para cualquier consulta sobre prendas, precios, stock, tiendas o recomendaciones, tenés que pedir la herramienta.
 Respondé SOLO con un objeto JSON válido, sin texto afuera, sin Markdown y sin explicaciones:
@@ -27,14 +27,15 @@ Reglas para "arguments":
 - Si la herramienta no devuelve productos, decí que no los tenés. Nunca sugieras categorías distintas ni productos inventados para rellenar.
 No inventes datos del catálogo.`;
 
-const ANSWER_SYSTEM_PROMPT = `Sos Cerca, una asesora de compras de ropa en Uruguay. Respondés siempre en español de Río de la Plata, con tono cercano y breve.
+const ANSWER_SYSTEM_PROMPT = `Sos Cerca, una asesora de compras de ropa en Uruguay. Respondés siempre en español neutro, claro y profesional, con tono amable y directo.
+Evitá jerga, modismos y expresiones coloquiales como "che", "mirá", "copado", "te tiro", "dale", "baratito" o "lucas". Escribí los precios siempre en UYU con número.
 Tenés disponibles SOLAMENTE los productos que devolvió la herramienta search_products. Nunca inventes productos, precios, talles, tiendas ni stock.
 Citá el nombre exacto de cada prenda que recomiendes, su precio en UYU, la tienda y el stock. Como máximo cuatro opciones.
 Si faltan datos para recomendar, hacé una pregunta concreta. No menciones la herramienta, el JSON ni que sos un modelo.
 Si los productos devueltos no coinciden con lo pedido, respondé que no tenés esos productos y poné "product_ids":[] . No recomiendes productos de otras categorías para rellenar.
 Si hay productos válidos, citá al menos uno en "product_ids". Nunca digas "no encontré" si vas a devolver ids.
 Respondé SOLO con un objeto JSON válido, sin texto afuera ni Markdown:
-{"answer":"tu respuesta en español rioplatense","product_ids":[id1,id2]}
+{"answer":"tu respuesta en español neutro y profesional","product_ids":[id1,id2]}
 "product_ids" son los ids numéricos de los productos que citaste, tomados de la lista de la herramienta. No inventes ids.`;
 
 function cleanReply(text) {
@@ -144,6 +145,18 @@ function parseToolCall(text, fallbackMessage) {
   return { name: 'search_products', arguments: args };
 }
 
+function polishTone(text) {
+  return String(text || '')
+    .replace(/^\s*(che|mir[áa]|mira)[,\s]+/i, '')
+    .replace(/\b(\d+)\s+lucas\b/gi, (_, n) => `${Number(n) * 1000} UYU`)
+    .replace(/\blucas\b/gi, 'UYU')
+    .replace(/\bcopad[oa]s?\b/gi, 'interesantes')
+    .replace(/\bte tiro\b/gi, 'te recomiendo')
+    .replace(/\bbaratitos?\b/gi, 'económicos')
+    .replace(/\bdale\b/gi, '')
+    .trim();
+}
+
 function answerText(data, raw) {
   const value = data?.answer ?? data?.reply ?? data?.text;
   if (typeof value === 'string') return value.trim();
@@ -158,7 +171,7 @@ function parseAnswer(text, results) {
   let ids = hasIdsField && Array.isArray(data.product_ids)
     ? data.product_ids.map(String).filter((id) => allowed.has(id))
     : [...allowed].slice(0, 6);
-  const answer = answerText(data, text);
+  const answer = polishTone(answerText(data, text));
   if (!allowed.size || /no (encontr|teng|hay|dispongo)|sin stock|no coincide/i.test(answer)) ids = [];
   return { answer, product_ids: ids };
 }
@@ -253,7 +266,7 @@ export default {
       if (phase === 'plan') {
         const text = await generate(env, buildPlanMessages(message, history), 900);
         const toolCall = parseToolCall(text, effectiveMessage(message, history));
-        if (toolCall.name === 'none') return json({ reply: toolCall.answer }, env);
+        if (toolCall.name === 'none') return json({ reply: polishTone(toolCall.answer) }, env);
         return json({ tool_call: toolCall, pending: 'Buscando en el catálogo…' }, env);
       }
 
