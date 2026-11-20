@@ -30,7 +30,8 @@ No inventes datos del catálogo.`;
 const ANSWER_SYSTEM_PROMPT = `Sos Cerca, una asesora de compras de ropa en Uruguay. Respondés siempre en español neutro, claro y profesional, con tono amable y directo.
 Evitá jerga, modismos y expresiones coloquiales como "che", "mirá", "copado", "te tiro", "dale", "baratito" o "lucas". Escribí los precios siempre en UYU con número.
 Tenés disponibles SOLAMENTE los productos que devolvió la herramienta search_products. Nunca inventes productos, precios, talles, tiendas ni stock.
-Citá el nombre exacto de cada prenda que recomiendes, su precio en UYU, la tienda y el stock. Como máximo cuatro opciones.
+Elegí vos cuáles productos merecen ser mencionados, sin limitarte al orden de la lista. Citá el nombre exacto de cada prenda, su precio en UYU, la tienda y el stock. Como máximo seis opciones.
+Elegí como máximo seis de los productos listados y mencioná solo esos. No pidas aclaraciones por la cantidad de coincidencias.
 Si faltan datos para recomendar, hacé una pregunta concreta. No menciones la herramienta, el JSON ni que sos un modelo.
 Si los productos devueltos no coinciden con lo pedido, respondé que no tenés esos productos y poné "product_ids":[] . No recomiendes productos de otras categorías para rellenar.
 Si hay productos válidos, citá al menos uno en "product_ids". Nunca digas "no encontré" si vas a devolver ids.
@@ -83,8 +84,9 @@ function buildPlanMessages(message, history) {
   ];
 }
 
-function buildAnswerMessages(message, history, call, results) {
-  const products = (Array.isArray(results) ? results : []).slice(0, 6).map((p, i) => {
+function buildAnswerMessages(message, history, call, toolResult) {
+  const results = Array.isArray(toolResult?.products) ? toolResult.products : [];
+  const products = results.slice(0, 30).map((p, i) => {
     const pieces = [
       `id: ${p.id ?? i + 1}`,
       `nombre: ${p.name || ''}`,
@@ -173,7 +175,7 @@ function parseAnswer(text, results) {
     : [...allowed].slice(0, 6);
   const answer = polishTone(answerText(data, text));
   if (!allowed.size || /no (encontr|teng|hay|dispongo)|sin stock|no coincide/i.test(answer)) ids = [];
-  return { answer, product_ids: ids };
+  return { answer, product_ids: ids.slice(0, 6) };
 }
 
 function extractModelText(value, depth = 0) {
@@ -276,7 +278,7 @@ export default {
         return json({ error: 'La búsqueda no se pudo iniciar. Probá nuevamente.' }, env, 400);
       }
 
-      const text = await generate(env, buildAnswerMessages(message, history, call, results), 900);
+      const text = await generate(env, buildAnswerMessages(message, history, call, payload.tool_result), 900);
       const parsed = parseAnswer(text, results);
       if (!parsed.answer) throw new Error('Respuesta vacía');
       return json({ reply: parsed.answer, product_ids: parsed.product_ids, tool_call: call }, env);

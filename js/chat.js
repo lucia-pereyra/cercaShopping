@@ -59,83 +59,55 @@ function rememberChat(role, content) {
   if (chatHistory.length > 8) chatHistory = chatHistory.slice(-8);
 }
 
-function close(value, field, product) {
-  if (!value) return true;
-  const wanted = norm(value);
-  const current = norm(product[field] || '');
-  return current.includes(wanted) || wanted.includes(current);
-}
-
-function closeGender(value, product) {
-  if (!value) return true;
-  const wanted = norm(value);
-  const current = norm(product.gender || '');
-  if (/female|mujer|women|woman|femenin/.test(wanted)) return /mujer|femenin|dam/.test(current);
-  if (/male|hombre|men|man|masculin/.test(wanted)) return /hombre|masculin|caballero/.test(current);
-  return close(value, 'gender', product);
-}
-
-const CHAT_STOPWORDS = new Set(['la', 'el', 'los', 'las', 'lo', 'al', 'del', 'de', 'que', 'con', 'por', 'para', 'un', 'una', 'unos', 'unas', 'algo', 'necesito', 'quiero', 'busco', 'mostrame', 'dame', 'gusta', 'gustaria', 'me', 'mio', 'mia', 'años', 'ano']);
+const CHAT_STOPWORDS = new Set(['la', 'el', 'los', 'las', 'lo', 'al', 'del', 'de', 'que', 'con', 'por', 'para', 'un', 'una', 'unos', 'unas', 'algo', 'necesito', 'quiero', 'busco', 'mostrame', 'dame', 'gusta', 'gustaria', 'me', 'mio', 'mia', 'anos', 'ano', 'mas', 'otra', 'otro', 'otras', 'otros', 'hija', 'hijas', 'nina', 'ninas', 'adolescente', 'mujer', 'mujeres', 'hombre', 'hombres', 'femenino', 'femenina', 'masculino', 'masculina', 'damas', 'caballero', 'novia', 'novio', 'ella', 'barato', 'barata', 'economico', 'economica', 'economicos', 'economicas', 'oferta', 'accesible', 'hasta', 'menos', 'lucas']);
 
 function chatTokens(value) {
   return norm(value).split(/[^a-z0-9$]+/).filter((word) => word.length > 1 && !CHAT_STOPWORDS.has(word));
 }
 
-function productWords(product) {
-  return new Set(norm([product.name, product.category, product.store, product.mall, product.color, product.gender, product.description].join(' ')).split(/[^a-z0-9]+/).filter(Boolean));
+function combinedMessage(message, history) {
+  const lastUser = [...(Array.isArray(history) ? history : [])]
+    .reverse()
+    .find((m) => m && m.role === 'user' && typeof m.content === 'string')?.content || '';
+  if (!lastUser) return String(message || '');
+  const complement = /^(para|de|en|con|más|mas|otra|otro|otras|otros|me gusta|sí|si|también)\b/i.test(String(message || '').trim());
+  return complement ? `${lastUser} — ${message}` : String(message || '');
 }
 
-function termMatches(term, words) {
-  for (const [key, variants] of Object.entries(synonyms)) {
-    if (term === key || variants.includes(term)) {
-      return words.has(key) || variants.some((variant) => words.has(variant));
-    }
-  }
-  return words.has(term);
+function interpretChatQuery(args = {}, fallbackMessage = '', history = []) {
+  const fromMessage = combinedMessage(fallbackMessage, history);
+  const text = fromMessage.trim() ? fromMessage : String(args.query || '');
+  const query = String(args.query || text);
+  const audience = inferredAudience(text, args.gender || '');
+  const cheap = /\b(barato|barata|economic[oa]s?|oferta|accesible|regalo|hasta|menos)\b/.test(norm(text)) || /\b\d+\s*(lucas|mil)\b/.test(norm(text));
+  const minPrice = Number(args.min_price);
+  const maxArg = Number(args.max_price);
+  const maxPrice = Number.isFinite(maxArg) ? maxArg : (cheap ? 2500 : Infinity);
+  return {
+    query,
+    queryTokens: chatTokens(query),
+    audience,
+    hard: {
+      gender: audience.strict ? audience.value : '',
+      mall: args.mall || '',
+      store: args.store || '',
+      category: args.category || '',
+      color: args.color || '',
+      size: args.size || '',
+      minPrice: Number.isFinite(minPrice) ? minPrice : 0,
+      maxPrice
+    },
+    soft: { cheap, avoidSport: isGoingOutQuery(text) },
+    limit: Math.min(6, Math.max(3, Number(args.limit) || 5))
+  };
 }
 
-function catalogSearch(args = {}, fallbackMessage = '') {
-  const q = String(args.query || fallbackMessage || '');
-  const ts = chatTokens(q);
-  const intentIds = new Set(productsForIntent(q).map((p) => String(p.id)));
-  const cheap = /\b(barato|barata|economic[oa]s?|oferta|accesible|regalo)\b/.test(norm(q));
-  const wantsFemale = /hija|niña|nina|adolescente|femenin|mujer/.test(norm(q));
-  const min = Number(args.min_price);
-  let max = Number(args.max_price);
-  if (cheap && Number.isFinite(max) && max < 500) max = 2500;
-  const effectiveMax = Number.isFinite(max) ? max : (cheap ? 2500 : Infinity);
+function catalogMatches(args = {}, fallbackMessage = '', history = []) {
+  return rankCatalog({ ...interpretChatQuery(args, fallbackMessage, history), all: false, full: true });
+}
 
-  const list = products
-    .filter((p) => Number(p.price) > 0)
-    .map((p) => {
-      const words = productWords(p);
-      const matched = ts.filter((term) => termMatches(term, words));
-      const intent = intentIds.has(String(p.id));
-      const affordable = cheap && Number(p.price) <= effectiveMax;
-      return {
-        p,
-        ok: matched.length > 0 || intent || affordable,
-        relevance: matched.length * 3 + (intent ? 6 : 0) + (affordable ? 1 : 0) - Number(p.price || 0) / 10000
-      };
-    })
-    .filter((x) => x.ok)
-    .filter((x) => Number(x.p.stock) > 0)
-    .filter((x) => close(args.mall, 'mall', x.p))
-    .filter((x) => close(args.store, 'store', x.p))
-    .filter((x) => close(args.category, 'category', x.p))
-    .filter((x) => closeGender(args.gender, x.p))
-    .filter((x) => !wantsFemale || /mujer|femenin|unisex|dam/.test(norm(x.p.gender)))
-    .filter((x) => !args.size || norm(x.p.size + ' ' + (x.p.sizes || '')).includes(norm(args.size)))
-    .filter((x) => !args.color || norm(x.p.color).includes(norm(args.color)))
-    .filter((x) => !Number.isFinite(min) || Number(x.p.price) >= min)
-    .filter((x) => Number(x.p.price) <= effectiveMax);
-
-  if (args.sort === 'low' || (cheap && !args.sort)) list.sort((a, b) => Number(a.p.price) - Number(b.p.price));
-  else if (args.sort === 'high') list.sort((a, b) => Number(b.p.price) - Number(a.p.price));
-  else list.sort((a, b) => b.relevance - a.relevance);
-
-  const limit = Math.min(6, Math.max(3, Number(args.limit) || 5));
-  return list.slice(0, limit).map((x) => x.p);
+function catalogSearch(args = {}, fallbackMessage = '', history = []) {
+  return catalogMatches(args, fallbackMessage, history).slice(0, 6);
 }
 
 function addStockLinks(container, matched) {
@@ -148,12 +120,11 @@ function addStockLinks(container, matched) {
   const list = document.createElement('div');
   list.className = 'ai-catalog-list';
   for (const p of matched) {
-    const item = document.createElement('a');
+    const item = document.createElement('button');
+    item.type = 'button';
     item.className = 'ai-catalog-item';
-    item.href = p.url || '#';
-    item.target = '_blank';
-    item.rel = 'noopener noreferrer';
-    item.setAttribute('aria-label', 'Ver ' + p.name + ' en ' + p.store);
+    item.setAttribute('data-product-open', String(p.id));
+    item.setAttribute('aria-label', 'Ver detalle de ' + p.name + ' de ' + p.store);
     if (p.image) {
       const img = document.createElement('img');
       img.className = 'ai-catalog-thumb';
@@ -185,6 +156,15 @@ function addStockLinks(container, matched) {
   }
   container.appendChild(list);
 }
+
+document.getElementById('aiMessages').addEventListener('click', (e) => {
+  const button = e.target.closest('[data-product-open]');
+  if (!button) return;
+  const card = [...document.querySelectorAll('#cards .card')].find((el) => el.dataset.productId === button.dataset.productOpen);
+  if (!card) return;
+  card.click();
+  card.scrollIntoView({ behavior: 'smooth', block: 'center' });
+});
 
 function localChatReply(message) {
   const clean = message.trim().toLocaleLowerCase('es-UY').replace(/[¡!¿?.,;:]+/g, ' ').replace(/\s+/g, ' ');
@@ -237,6 +217,7 @@ aiForm.addEventListener('submit', async (e) => {
     const plan = await postChat({ phase: 'plan', message, history });
     let reply;
     let matched = [];
+    let allResults = [];
     let searchArgs = null;
 
     if (plan.reply) {
@@ -246,17 +227,18 @@ aiForm.addEventListener('submit', async (e) => {
       if (!call || call.name !== 'search_products') throw new Error('No pude consultar el catálogo. Probá de nuevo.');
       searchArgs = call.arguments || {};
       pending.textContent = 'Buscando en el catálogo…';
-      const results = catalogSearch(searchArgs, message);
+      allResults = catalogMatches(searchArgs, message, history);
+      const results = allResults.slice(0, 30);
       const answer = await postChat({
         phase: 'answer',
         message,
         history,
         tool_call: call,
-        tool_result: { products: results }
+        tool_result: { products: results, total_matches: allResults.length }
       });
       reply = answer.reply;
       const ids = new Set((answer.product_ids || []).map(String));
-      matched = products.filter((p) => ids.has(String(p.id)));
+      matched = allResults.filter((p) => ids.has(String(p.id)));
     }
 
     let clean = String(reply || '¿Me contás un poco más sobre la ocasión, el estilo o el talle que tenés en mente?');
@@ -268,7 +250,8 @@ aiForm.addEventListener('submit', async (e) => {
     addStockLinks(pending, matched);
 
     query = searchArgs?.query || message;
-    recommendedIds = matched.length ? new Set(matched.map((p) => String(p.id))) : null;
+    aiInput.value = query;
+    recommendedIds = allResults.length ? allResults.map((p) => String(p.id)) : null;
     render();
 
     rememberChat('assistant', clean + (matched.length ? ' Productos del catálogo: ' + matched.map((p) => p.name).join(', ') : ''));

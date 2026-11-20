@@ -148,3 +148,5 @@ header{background:#fff;border-bottom-color:#d7e1ee}
 .ai-catalog-item:hover{transform:translateY(-2px);box-shadow:0 10px 22px #203b5618}
 .empty{background:linear-gradient(135deg,#f4faff,#faf5ff 60%,#fff9ef);border:1px solid #dfe9f3;box-shadow:0 12px 30px #2445660c}
 .empty .big{color:#6d8fdb}.empty b{color:#315d78}
+@media(max-width:560px){.filters{grid-template-columns:repeat(2,minmax(0,1fr));width:100%;max-width:100%}.filter-head,.filter-group{min-width:0;max-width:100%}.check{min-width:0;overflow-wrap:anywhere}.reset{flex:none}}
+@media(max-width:360px){header{padding:0 12px}.brand{font-size:20px;gap:7px}.logo{width:30px;height:30px;border-radius:10px}#uploadBtn{display:none}}
