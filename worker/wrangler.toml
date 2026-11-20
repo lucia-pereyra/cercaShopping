@@ -1,0 +1,10 @@
+name = "cerca-chat"
+main = "worker/index.js"
+compatibility_date = "2026-11-19"
+
+[ai]
+binding = "AI"
+
+[vars]
+CHAT_MODEL = "@cf/meta/llama-3.3-70b-instruct-fp8-fast"
+AI_MODEL = "@cf/deepseek-ai/deepseek-r1-distill-qwen-32b"
